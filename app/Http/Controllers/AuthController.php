@@ -1,8 +1,11 @@
 <?php
 namespace App\Http\Controllers;
+use App\Jobs\VerifyUserJobs;
 use Illuminate\Http\Request;
 use App\Models\User;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 use Tymon\JWTAuth\Facades\JWTAuth;
 class AuthController extends Controller
 {
@@ -12,7 +15,7 @@ class AuthController extends Controller
      * @return void
      */
     public function __construct() {
-        $this->middleware('auth:api', ['except' => ['login', 'register']]); 
+        $this->middleware('auth:api', ['except' => ['login', 'register', 'accountVerify']]); 
     }
     /**
      * Get a JWT via given credentials.
@@ -47,13 +50,39 @@ class AuthController extends Controller
             return response()->json($validator->errors()->toJson(), 400);
         }
         $user = User::create(array_merge(
-                    $validator->validated(),
-                    ['password' => bcrypt($request->password)]
-                ));
+                $validator->validated(),
+                ['password' => bcrypt($request->password), 'slug' => Str::random(15), 'token' => Str::random(20), 'status' => 'active']
+            ));
+
+        if($user) {
+            $detail = [
+                'name' => $user->name, 
+                'email' => $user->email, 
+                'hashEmail' => Crypt::encryptString($user->email), 
+                'token' => $user->token
+            ];
+            dispatch(new VerifyUserJobs($detail));
+        }        
+
         return response()->json([
             'message' => 'User successfully registered',
             'user' => $user
         ], 201);
+    }
+
+     /**
+     * Verify the user (Invalidate the token).
+     */
+    public function accountVerify($token, $email) {
+        $user = User::where([['email', Crypt::decryptString($email)], ['token', $token]])->first();
+        if ($user->token == $token) {
+            $user->update([
+                'verify' => true,
+                'token' => null
+            ]);
+            return redirect()->to('http://127.0.0.1:8000/api/auth/verify/success');
+        }
+        return redirect()->to('http://127.0.0.1:8000/api/auth/verify/invalid_token');
     }
 
     /**
